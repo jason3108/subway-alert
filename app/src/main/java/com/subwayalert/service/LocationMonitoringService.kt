@@ -71,6 +71,8 @@ class LocationMonitoringService : Service() {
                 lastLocation = null
                 startForeground(NOTIFICATION_ID, createNotification())
                 startLocationUpdates()
+                // Check if already near a station when starting
+                checkInitialProximity()
             }
             ACTION_STOP -> {
                 stopLocationUpdates()
@@ -87,11 +89,12 @@ class LocationMonitoringService : Service() {
             }
             ACTION_TRIGGER_ALERT -> {
                 val stationName = intent.getStringExtra(EXTRA_STATION_NAME) ?: "地铁站"
+                val distance = intent.getIntExtra(EXTRA_DISTANCE, 0)
                 // Parse vibrate mode from extra, use LONG as fallback if parsing fails
                 val mode = intent.getStringExtra(EXTRA_VIBRATE_MODE)?.let {
                     try { VibrateMode.valueOf(it) } catch (e: Exception) { VibrateMode.LONG }
                 } ?: VibrateMode.LONG
-                triggerAlert(stationName, mode)
+                triggerAlert(stationName, distance, mode)
             }
             ACTION_DISMISS_ALERT -> {
                 stopAlert()
@@ -226,21 +229,24 @@ class LocationMonitoringService : Service() {
     }
     
     private fun processLocationUpdate(location: android.location.Location) {
-        // Check distance to each monitored station
-        for ((stationName, coords) in stationCoordinates) {
+        // Calculate distance to each station
+        val stationDistances = stationCoordinates.mapNotNull { (stationName, coords) ->
             val results = FloatArray(1)
             android.location.Location.distanceBetween(
                 location.latitude, location.longitude,
                 coords.first, coords.second,
                 results
             )
-            val distance = results[0]
-            
+            stationName to results[0]
+        }.sortedBy { it.second } // Sort by distance (nearest first)
+        
+        // Check proximity and trigger alerts for stations within range
+        for ((stationName, distance) in stationDistances) {
             if (distance <= geofenceRadius) {
                 // Within range - trigger alert if not already alerted
                 if (!alertedStations.contains(stationName)) {
                     alertedStations.add(stationName)
-                    triggerAlert(stationName, currentVibrateMode)
+                    triggerAlert(stationName, distance.toInt(), currentVibrateMode)
                 }
             } else {
                 // Out of range - reset alert state
@@ -248,13 +254,32 @@ class LocationMonitoringService : Service() {
             }
         }
         
-        // Broadcast location update for UI
+        // Broadcast location update with sorted station list for UI
         lastLocation = location
         val broadcastIntent = Intent(ACTION_LOCATION_UPDATE).apply {
             putExtra(EXTRA_LATITUDE, location.latitude)
             putExtra(EXTRA_LONGITUDE, location.longitude)
+            // Put sorted station list as JSON: "Station1:distance1;Station2:distance2"
+            putExtra(EXTRA_STATION_DISTANCES, stationDistances.joinToString(";") { 
+                "${it.first}:${it.second.toInt()}" 
+            })
         }
         sendBroadcast(broadcastIntent)
+    }
+    
+    private fun checkInitialProximity() {
+        // Get last known location first, then check proximity
+        if (ActivityCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                location?.let {
+                    lastLocation = it
+                    processLocationUpdate(it)
+                }
+            }
+        }
     }
     
     private fun parseStationCoordinates(coordsJson: String?): Map<String, Pair<Double, Double>> {
@@ -293,72 +318,21 @@ class LocationMonitoringService : Service() {
     private var currentAlertStation: String = ""
     private var mediaPlayer: android.media.MediaPlayer? = null
 
-    private fun triggerAlert(stationName: String, vibrateMode: VibrateMode = currentVibrateMode) {
+    private fun triggerAlert(stationName: String, distance: Int, vibrateMode: VibrateMode = currentVibrateMode) {
         currentAlertStation = stationName
         isAlertActive = true
         
-        // Show full-screen notification (will turn on screen and show over lock screen)
-        showFullScreenAlertNotification(stationName)
-        // Start continuous alarm sound
-        startAlarmSound()
-        // Start continuous vibration
-        startAlarmVibration()
+        // Launch AlertActivity to show full-screen alert
+        val alertIntent = com.subwayalert.presentation.ui.alert.AlertActivity.createIntent(
+            this, stationName, distance
+        )
+        startActivity(alertIntent)
     }
 
     private fun stopAlert() {
         isAlertActive = false
-        stopAlarmSound()
-        stopVibration()
-        // Cancel the notification
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.cancel(ALERT_NOTIFICATION_ID)
         // Reset alert state so it can trigger again when leaving and re-entering
         alertedStations.clear()
-    }
-
-    private fun showFullScreenAlertNotification(stationName: String) {
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        
-        // Create dismiss intent
-        val dismissIntent = Intent(this, LocationMonitoringService::class.java).apply {
-            action = ACTION_DISMISS_ALERT
-        }
-        val dismissPendingIntent = PendingIntent.getService(
-            this, 0,
-            dismissIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Create full-screen intent (shows over lock screen)
-        val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val fullScreenPendingIntent = PendingIntent.getActivity(
-            this, stationName.hashCode(),
-            fullScreenIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID_ALERT)
-            .setContentTitle("🚇 到站提醒 - $stationName")
-            .setContentText("点击关闭提醒")
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(fullScreenPendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setOngoing(true)
-            .setFullScreenIntent(fullScreenPendingIntent, true)  // Full-screen intent
-            .addAction(R.drawable.ic_notification, "关闭", dismissPendingIntent)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setSound(android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI, android.media.AudioManager.STREAM_ALARM)
-            .build()
-
-        if (ActivityCompat.checkSelfPermission(
-                this, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationManager.notify(ALERT_NOTIFICATION_ID, notification)
-        }
     }
 
     private fun startAlarmSound() {
@@ -469,6 +443,7 @@ class LocationMonitoringService : Service() {
         const val EXTRA_VIBRATE_MODE = "vibrate_mode"
         const val EXTRA_STATIONS = "stations"
         const val EXTRA_STATION_NAME = "station_name"
+        const val EXTRA_DISTANCE = "distance"
 
         private const val LOCATION_UPDATE_INTERVAL = 15000L // 15 seconds
         private const val FASTEST_LOCATION_INTERVAL = 10000L // 10 seconds
@@ -479,6 +454,7 @@ class LocationMonitoringService : Service() {
         const val ACTION_STATION_ALERT = "com.subwayalert.ACTION_STATION_ALERT"
         const val EXTRA_LATITUDE = "latitude"
         const val EXTRA_LONGITUDE = "longitude"
+        const val EXTRA_STATION_DISTANCES = "station_distances"
         const val EXTRA_ALERT_STATION_NAME = "alert_station_name"
         const val EXTRA_STATION_COORDS = "station_coords"
         const val EXTRA_GEOFENCE_RADIUS = "geofence_radius"
@@ -514,10 +490,11 @@ class LocationMonitoringService : Service() {
             context.startService(intent)
         }
 
-        fun triggerAlert(context: Context, stationName: String, vibrateMode: VibrateMode? = null) {
+        fun triggerAlert(context: Context, stationName: String, distance: Int = 0, vibrateMode: VibrateMode? = null) {
             val intent = Intent(context, LocationMonitoringService::class.java).apply {
                 action = ACTION_TRIGGER_ALERT
                 putExtra(EXTRA_STATION_NAME, stationName)
+                putExtra(EXTRA_DISTANCE, distance)
                 vibrateMode?.let { putExtra(EXTRA_VIBRATE_MODE, it.name) }
             }
             context.startService(intent)

@@ -501,9 +501,18 @@ class MainViewModel @Inject constructor(
     }
 
     fun testGeofenceAlert() {
-        val stations = _uiState.value.stations
-        if (stations.isNotEmpty()) {
-            LocationMonitoringService.triggerAlert(context, stations.first().name, _uiState.value.settings.vibrateMode)
+        val state = _uiState.value
+        if (state.stations.isEmpty()) return
+        
+        // Sort stations by distance (nearest first, within-range first)
+        val sortedStations = state.stations.sortedBy { station ->
+            val distance = state.stationDistances[station.id] ?: Float.MAX_VALUE
+            val isWithinRange = distance <= state.settings.geofenceRadius
+            if (isWithinRange) -distance else distance
         }
+        
+        val nearestStation = sortedStations.firstOrNull() ?: return
+        val distance = state.stationDistances[nearestStation.id]?.toInt() ?: 0
+        LocationMonitoringService.triggerAlert(context, nearestStation.name, distance, state.settings.vibrateMode)
     }
 }

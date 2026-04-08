@@ -51,6 +51,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Alert Activity for station proximity alerts -->
+        <activity
+            android:name=".presentation.ui.alert.AlertActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.SubwayAlert" />
+
         <!-- Location Monitoring Foreground Service -->
         <service
             android:name=".service.LocationMonitoringService"

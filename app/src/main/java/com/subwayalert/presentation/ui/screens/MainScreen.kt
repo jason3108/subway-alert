@@ -237,7 +237,13 @@ fun MainScreen(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(uiState.stations, key = { it.id }) { station ->
+                    val sortedStations = uiState.stations.sortedBy { station ->
+                        val distance = uiState.stationDistances[station.id] ?: Float.MAX_VALUE
+                        val isWithinRange = distance <= uiState.settings.geofenceRadius
+                        // Sort: within range first, then by distance
+                        if (isWithinRange) -distance else distance
+                    }
+                    items(sortedStations, key = { it.id }) { station ->
                         val distance = uiState.stationDistances[station.id]
                         val isWithinRange = distance != null && distance <= uiState.settings.geofenceRadius
                         StationCard(
@@ -947,7 +953,15 @@ fun DebugDialog(
                         style = MaterialTheme.typography.bodyMedium
                     )
                 } else {
-                    stations.forEach { station ->
+                    // Sort stations by distance when current location is available
+                    val sortedStations = if (currentLocation != null) {
+                        stations.sortedBy { station ->
+                            distances[station.id] ?: Float.MAX_VALUE
+                        }
+                    } else {
+                        stations
+                    }
+                    sortedStations.forEach { station ->
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = station.name,
