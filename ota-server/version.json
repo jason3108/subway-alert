@@ -1,7 +1,7 @@
 {
-  "version": "1.0.37",
-  "versionCode": 38,
+  "version": "1.0.34",
+  "versionCode": 35,
   "downloadUrl": "/apk/app.apk",
-  "releaseNotes": "调试信息按钮始终显示，不再需要关闭监控才能访问",
-  "apkSize": 16456720
+  "releaseNotes": "后台运行时持续刷新位置监控，使用前台服务在后台保持运行",
+  "apkSize": 15793245
 }

@@ -13,8 +13,8 @@ android {
         applicationId = "com.subwayalert"
         minSdk = 26
         targetSdk = 34
-        versionCode = 38
-        versionName = "1.0.37"
+        versionCode = 35
+        versionName = "1.0.34"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -91,9 +91,6 @@ dependencies {
 
     // JSON
     implementation("com.google.code.gson:gson:2.10.1")
-
-    // OSMDroid for maps (OpenStreetMap)
-    implementation("org.osmdroid:osmdroid-android:6.1.18")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
