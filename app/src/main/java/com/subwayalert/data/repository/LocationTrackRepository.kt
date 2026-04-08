@@ -75,8 +75,8 @@ class LocationTrackRepository @Inject constructor(
         val point = LocationPoint(latitude, longitude, System.currentTimeMillis(), accuracy)
         trackingPoints.add(point)
         
-        // Also persist to storage periodically (every 10 points)
-        if (trackingPoints.size % 10 == 0) {
+        // Persist to storage - first point immediately, then every 10 points
+        if (trackingPoints.size == 1 || trackingPoints.size % 10 == 0) {
             currentTrackId?.let { id ->
                 context.trackDataStore.edit { prefs ->
                     val tracks = getTracksFromPrefs(prefs)

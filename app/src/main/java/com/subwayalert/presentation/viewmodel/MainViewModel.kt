@@ -420,8 +420,10 @@ class MainViewModel @Inject constructor(
                         state.copy(currentLocation = loc, stationDistances = distances)
                     }
                     
-                    // Record location track if enabled and moved > 500m
-                    if (_uiState.value.settings.trackLocationTrack && _uiState.value.isMonitoring) {
+                    // Record location track if enabled
+                    // Note: We don't check isMonitoring here because this is called from
+                    // startMonitoringService() before isMonitoring is set to true
+                    if (_uiState.value.settings.trackLocationTrack) {
                         recordLocationTrack(loc)
                     }
                     
