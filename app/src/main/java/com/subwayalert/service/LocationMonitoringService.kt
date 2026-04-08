@@ -276,7 +276,25 @@ class LocationMonitoringService : Service() {
             fusedLocationClient.lastLocation.addOnSuccessListener { location ->
                 location?.let {
                     lastLocation = it
-                    processLocationUpdate(it)
+                    // Process immediately with sorted stations - alert nearest if within range
+                    val stationDistances = stationCoordinates.mapNotNull { (stationName, coords) ->
+                        val results = FloatArray(1)
+                        android.location.Location.distanceBetween(
+                            it.latitude, it.longitude,
+                            coords.first, coords.second,
+                            results
+                        )
+                        stationName to results[0]
+                    }.sortedBy { it.second }
+                    
+                    // Alert nearest station if within range
+                    val nearest = stationDistances.firstOrNull()
+                    if (nearest != null && nearest.second <= geofenceRadius) {
+                        if (!alertedStations.contains(nearest.first)) {
+                            alertedStations.add(nearest.first)
+                            triggerAlert(nearest.first, nearest.second.toInt(), currentVibrateMode)
+                        }
+                    }
                 }
             }
         }
