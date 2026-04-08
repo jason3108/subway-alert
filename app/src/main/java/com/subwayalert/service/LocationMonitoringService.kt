@@ -224,26 +224,30 @@ class LocationMonitoringService : Service() {
 
     private var isAlertActive = false
     private var currentAlertStation: String = ""
+    private var mediaPlayer: android.media.MediaPlayer? = null
 
     private fun triggerAlert(stationName: String, vibrateMode: VibrateMode = currentVibrateMode) {
         currentAlertStation = stationName
         isAlertActive = true
         
-        // Show persistent notification with dismiss button
-        showAlertNotification(stationName)
-        // Start continuous vibration like alarm
+        // Show full-screen notification (will turn on screen and show over lock screen)
+        showFullScreenAlertNotification(stationName)
+        // Start continuous alarm sound
+        startAlarmSound()
+        // Start continuous vibration
         startAlarmVibration()
     }
 
     private fun stopAlert() {
         isAlertActive = false
+        stopAlarmSound()
         stopVibration()
         // Cancel the notification
         val notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.cancel(ALERT_NOTIFICATION_ID)
     }
 
-    private fun showAlertNotification(stationName: String) {
+    private fun showFullScreenAlertNotification(stationName: String) {
         val notificationManager = getSystemService(NotificationManager::class.java)
         
         // Create dismiss intent
@@ -256,13 +260,13 @@ class LocationMonitoringService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Create open intent
-        val openIntent = Intent(this, MainActivity::class.java).apply {
+        // Create full-screen intent (shows over lock screen)
+        val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val openPendingIntent = PendingIntent.getActivity(
+        val fullScreenPendingIntent = PendingIntent.getActivity(
             this, stationName.hashCode(),
-            openIntent,
+            fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -270,11 +274,14 @@ class LocationMonitoringService : Service() {
             .setContentTitle("🚇 到站提醒 - $stationName")
             .setContentText("点击关闭提醒")
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(openPendingIntent)
+            .setContentIntent(fullScreenPendingIntent)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setOngoing(true)  // Persistent notification
+            .setOngoing(true)
+            .setFullScreenIntent(fullScreenPendingIntent, true)  // Full-screen intent
             .addAction(R.drawable.ic_notification, "关闭", dismissPendingIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI, android.media.AudioManager.STREAM_ALARM)
             .build()
 
         if (ActivityCompat.checkSelfPermission(
@@ -282,6 +289,36 @@ class LocationMonitoringService : Service() {
             ) == PackageManager.PERMISSION_GRANTED
         ) {
             notificationManager.notify(ALERT_NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun startAlarmSound() {
+        try {
+            stopAlarmSound()
+            mediaPlayer = android.media.MediaPlayer().apply {
+                setAudioAttributes(android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build())
+                setDataSource(this@LocationMonitoringService, android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI)
+                isLooping = true
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun stopAlarmSound() {
+        try {
+            mediaPlayer?.apply {
+                if (isPlaying) stop()
+                release()
+            }
+            mediaPlayer = null
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -295,14 +332,15 @@ class LocationMonitoringService : Service() {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Alarm pattern: vibrate 1s, pause 0.5s, repeat indefinitely
-            val pattern = longArrayOf(0, 1000, 500, 1000, 500, 1000, 500)
-            val amplitudes = intArrayOf(0, 255, 0, 255, 0, 255, 0)
-            val effect = VibrationEffect.createWaveform(pattern, amplitudes, -1)
+            // Alarm pattern: wait 0ms, vibrate 800ms, pause 200ms, repeat indefinitely
+            // Using VibrationEffect.createWaveform for proper looping
+            val pattern = longArrayOf(0, 800, 200)  // Simple pattern that loops
+            val amplitudes = intArrayOf(0, 255, 0)  // Max amplitude for vibration
+            val effect = VibrationEffect.createWaveform(pattern, amplitudes, -1)  // -1 = repeat forever
             vibrator.vibrate(effect)
         } else {
             @Suppress("DEPRECATION")
-            vibrator.vibrate(longArrayOf(0, 1000, 500, 1000, 500, 1000, 500), -1)
+            vibrator.vibrate(longArrayOf(0, 800, 200), -1)
         }
     }
 
