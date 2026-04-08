@@ -1,0 +1,43 @@
+# Built outputs
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local config
+local.properties
+*.local
+gradle.properties.local
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+
+# Generated files
+captures/
+.externalNativeBuild/
+.cxx/
+*.x86
+*.x86_64
+*.armeabi-v7a
+*.arm64-v8a
+*.mips
+*.mips64
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Maps
+*.map
