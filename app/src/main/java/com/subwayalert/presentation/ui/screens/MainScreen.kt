@@ -239,7 +239,7 @@ fun MainScreen(
                 ) {
                     items(uiState.stations, key = { it.id }) { station ->
                         val distance = uiState.stationDistances[station.id]
-                        val isWithinRange = distance != null && distance <= station.radius
+                        val isWithinRange = distance != null && distance <= uiState.settings.geofenceRadius
                         StationCard(
                             station = station,
                             distance = distance,

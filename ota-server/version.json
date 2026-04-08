@@ -1,7 +1,7 @@
 {
-  "version": "1.0.30",
-  "versionCode": 31,
+  "version": "1.0.31",
+  "versionCode": 32,
   "downloadUrl": "/apk/app.apk",
-  "releaseNotes": "优化地铁内定位：改用网络定位替代GPS，信号差时仍能更新位置",
-  "apkSize": 15789197
+  "releaseNotes": "修复进入监控范围后站点高亮显示不正确的问题",
+  "apkSize": 15789205
 }
