@@ -7,7 +7,7 @@ set -e
 PROJECT_DIR="/home/ubuntu/.openclaw/workspace/subway-alert"
 OTA_SERVER_DIR="$PROJECT_DIR/ota-server"
 VERSION_FILE="$OTA_SERVER_DIR/version.json"
-APP_DIR="$PROJECT_DIR/app"
+BUILD_FILE="$PROJECT_DIR/app/build.gradle.kts"
 
 # 默认版本说明
 if [ -z "$1" ]; then
@@ -20,9 +20,9 @@ echo "========================================"
 echo "  地铁警报 OTA 构建脚本"
 echo "========================================"
 
-# 1. 读取当前版本
-CURRENT_VERSION=$(grep 'const val VERSION = ' "$APP_DIR/src/main/java/com/subwayalert/domain/model/UpdateInfo.kt" | sed 's/.*VERSION = "\(.*\)".*/\1/')
-CURRENT_CODE=$(grep 'const val VERSION_CODE = ' "$APP_DIR/src/main/java/com/subwayalert/domain/model/UpdateInfo.kt" | sed 's/.*VERSION_CODE = \(.*\)/\1/')
+# 1. 读取当前版本 (从 build.gradle.kts)
+CURRENT_VERSION=$(grep 'versionName' "$BUILD_FILE" | grep -v 'versionName property' | sed 's/.*versionName = "\(.*\)".*/\1/' | head -1)
+CURRENT_CODE=$(grep 'versionCode' "$BUILD_FILE" | grep -v 'versionCode property' | sed 's/.*versionCode = \(.*\)/\1/' | head -1)
 
 echo "当前版本: $CURRENT_VERSION (versionCode: $CURRENT_CODE)"
 echo "变更日志: $CHANGE_LOG"
@@ -39,9 +39,16 @@ NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
 
 echo "新版本: $NEW_VERSION (versionCode: $NEW_CODE)"
 
-# 3. 更新 UpdateInfo.kt
-sed -i "s/const val VERSION = \"$CURRENT_VERSION\"/const val VERSION = \"$NEW_VERSION\"/" "$APP_DIR/src/main/java/com/subwayalert/domain/model/UpdateInfo.kt"
-sed -i "s/const val VERSION_CODE = $CURRENT_CODE/const val VERSION_CODE = $NEW_CODE/" "$APP_DIR/src/main/java/com/subwayalert/domain/model/UpdateInfo.kt"
+# 3. 更新 build.gradle.kts
+sed -i "s/versionName = \"$CURRENT_VERSION\"/versionName = \"$NEW_VERSION\"/" "$BUILD_FILE"
+sed -i "s/versionCode = $CURRENT_CODE/versionCode = $NEW_CODE/" "$BUILD_FILE"
+
+echo "✅ build.gradle.kts 已更新"
+
+# 3.5 更新 UpdateInfo.kt (运行时版本常量)
+UPDATE_INFO="$PROJECT_DIR/app/src/main/java/com/subwayalert/domain/model/UpdateInfo.kt"
+sed -i "s/const val VERSION = \"$CURRENT_VERSION\"/const val VERSION = \"$NEW_VERSION\"/" "$UPDATE_INFO"
+sed -i "s/const val VERSION_CODE = $CURRENT_CODE/const val VERSION_CODE = $NEW_CODE/" "$UPDATE_INFO"
 
 echo "✅ UpdateInfo.kt 已更新"
 
@@ -51,7 +58,7 @@ echo "📦 正在构建 APK..."
 cd "$PROJECT_DIR"
 ./gradlew assembleDebug --quiet
 
-APK_PATH="$APP_DIR/build/outputs/apk/debug/app-debug.apk"
+APK_PATH="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 if [ ! -f "$APK_PATH" ]; then
     echo "❌ 构建失败!"
     exit 1
@@ -66,14 +73,12 @@ echo "✅ APK 构建成功: ${APK_SIZE_MB}MB"
 cp "$APK_PATH" "$OTA_SERVER_DIR/apk/app.apk"
 echo "✅ APK 已复制到 OTA 服务器"
 
-# 6. 更新 version.json (保留上次的downloadUrl)
-PREV_DOWNLOAD_URL=$(grep '"downloadUrl":' "$VERSION_FILE" 2>/dev/null | sed 's/.*"downloadUrl": *"\([^"]*\)".*/\1/' || echo "http://你的服务器IP:8080/apk/app.apk")
-
+# 6. 更新 version.json
 cat > "$VERSION_FILE" << EOF
 {
   "version": "$NEW_VERSION",
   "versionCode": $NEW_CODE,
-  "downloadUrl": "$PREV_DOWNLOAD_URL",
+  "downloadUrl": "/apk/app.apk",
   "releaseNotes": "$CHANGE_LOG",
   "apkSize": $APK_SIZE
 }
@@ -101,5 +106,4 @@ echo ""
 echo "变更说明:"
 echo "$CHANGE_LOG"
 echo ""
-echo "OTA 服务器地址: http://你的服务器IP:8080"
-echo "version.json 已更新，可以部署了"
+echo "OTA 服务器运行中: http://localhost:8080"
