@@ -273,11 +273,16 @@ class MainViewModel @Inject constructor(
         val monitoringStations = _uiState.value.stations.filter { it.isMonitoring }
         val settings = _uiState.value.settings
         
-        // Start the notification service
+        // Build station coordinates map
+        val stationCoords = monitoringStations.associate { it.name to (it.latitude to it.longitude) }
+        
+        // Start the notification service with station coordinates
         LocationMonitoringService.startService(
             context, 
             settings.vibrateMode,
-            monitoringStations.map { it.name }
+            monitoringStations.map { it.name },
+            stationCoords,
+            settings.geofenceRadius
         )
         
         // Setup based on monitoring mode
@@ -407,48 +412,35 @@ class MainViewModel @Inject constructor(
                 val location = getLastKnownLocation()
                 
                 location?.let { loc ->
-                    _uiState.update { state ->
-                        val distances = state.stations.associate { station ->
-                            val results = FloatArray(1)
-                            Location.distanceBetween(
-                                loc.latitude, loc.longitude,
-                                station.latitude, station.longitude,
-                                results
-                            )
-                            station.id to results[0]
-                        }
-                        state.copy(currentLocation = loc, stationDistances = distances)
-                    }
-                    
-                    // Record location track if enabled
-                    // Note: We don't check isMonitoring here because this is called from
-                    // startMonitoringService() before isMonitoring is set to true
-                    if (_uiState.value.settings.trackLocationTrack) {
-                        recordLocationTrack(loc)
-                    }
-                    
-                    // Check if any station is within range and trigger alert
-                    // Use current settings radius, not each station's stored radius
-                    val currentStations = _uiState.value.stations
-                    val currentDistances = _uiState.value.stationDistances
-                    val currentRadius = _uiState.value.settings.geofenceRadius
-                    
-                    for (station in currentStations) {
-                        val distance = currentDistances[station.id]
-                        if (distance != null && distance <= currentRadius) {
-                            // Only alert if not already alerted for this station
-                            if (!alertedStations.contains(station.id)) {
-                                alertedStations.add(station.id)
-                                LocationMonitoringService.triggerAlert(context, station.name, _uiState.value.settings.vibrateMode)
-                            }
-                        } else {
-                            // Reset alerted state if moved out of range
-                            alertedStations.remove(station.id)
-                        }
-                    }
+                    processLocationUpdate(loc)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+            }
+        }
+    }
+
+    /**
+     * Process location update - shared by both foreground and background modes
+     */
+    private fun processLocationUpdate(loc: Location) {
+        _uiState.update { state ->
+            val distances = state.stations.associate { station ->
+                val results = FloatArray(1)
+                Location.distanceBetween(
+                    loc.latitude, loc.longitude,
+                    station.latitude, station.longitude,
+                    results
+                )
+                station.id to results[0]
+            }
+            state.copy(currentLocation = loc, stationDistances = distances)
+        }
+        
+        // Record location track if enabled
+        if (_uiState.value.settings.trackLocationTrack) {
+            viewModelScope.launch {
+                recordLocationTrack(loc)
             }
         }
     }

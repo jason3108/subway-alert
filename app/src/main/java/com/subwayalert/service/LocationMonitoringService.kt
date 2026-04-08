@@ -44,6 +44,10 @@ class LocationMonitoringService : Service() {
 
     private var currentVibrateMode: VibrateMode = VibrateMode.LONG
     private var monitoredStations: List<String> = emptyList()
+    private var stationCoordinates: Map<String, Pair<Double, Double>> = emptyMap() // station name -> (lat, lng)
+    private var alertedStations: MutableSet<String> = mutableSetOf()
+    private var lastLocation: android.location.Location? = null
+    private var geofenceRadius: Float = 300f
 
     override fun onCreate() {
         super.onCreate()
@@ -60,6 +64,11 @@ class LocationMonitoringService : Service() {
                     try { VibrateMode.valueOf(it) } catch (e: Exception) { VibrateMode.LONG }
                 } ?: VibrateMode.LONG
                 monitoredStations = intent.getStringArrayListExtra(EXTRA_STATIONS) ?: emptyList()
+                // Parse station coordinates from extra
+                stationCoordinates = parseStationCoordinates(intent.getStringExtra(EXTRA_STATION_COORDS))
+                geofenceRadius = intent.getFloatExtra(EXTRA_GEOFENCE_RADIUS, 300f)
+                alertedStations.clear()
+                lastLocation = null
                 startForeground(NOTIFICATION_ID, createNotification())
                 startLocationUpdates()
             }
@@ -203,13 +212,71 @@ class LocationMonitoringService : Service() {
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
-            // Location updates received - service is alive
+            // Process each location update
+            result.lastLocation?.let { location ->
+                processLocationUpdate(location)
+            }
         }
 
         override fun onLocationAvailability(availability: LocationAvailability) {
             if (!availability.isLocationAvailable) {
                 // Location unavailable - might need to restart
             }
+        }
+    }
+    
+    private fun processLocationUpdate(location: android.location.Location) {
+        // Check distance to each monitored station
+        for ((stationName, coords) in stationCoordinates) {
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(
+                location.latitude, location.longitude,
+                coords.first, coords.second,
+                results
+            )
+            val distance = results[0]
+            
+            if (distance <= geofenceRadius) {
+                // Within range - trigger alert if not already alerted
+                if (!alertedStations.contains(stationName)) {
+                    alertedStations.add(stationName)
+                    triggerAlert(stationName, currentVibrateMode)
+                }
+            } else {
+                // Out of range - reset alert state
+                alertedStations.remove(stationName)
+            }
+        }
+        
+        // Broadcast location update for UI
+        lastLocation = location
+        val broadcastIntent = Intent(ACTION_LOCATION_UPDATE).apply {
+            putExtra(EXTRA_LATITUDE, location.latitude)
+            putExtra(EXTRA_LONGITUDE, location.longitude)
+        }
+        sendBroadcast(broadcastIntent)
+    }
+    
+    private fun parseStationCoordinates(coordsJson: String?): Map<String, Pair<Double, Double>> {
+        if (coordsJson.isNullOrEmpty()) return emptyMap()
+        return try {
+            // Format: "Station1:lat1,lng1;Station2:lat2,lng2"
+            coordsJson.split(";").mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size == 2) {
+                    val name = parts[0]
+                    val coords = parts[1].split(",")
+                    if (coords.size == 2) {
+                        val lat = coords[0].toDoubleOrNull()
+                        val lng = coords[1].toDoubleOrNull()
+                        if (lat != null && lng != null) {
+                            name to (lat to lng)
+                        } else null
+                    } else null
+                } else null
+            }.toMap()
+        } catch (e: Exception) {
+            emptyMap()
         }
     }
 
@@ -245,6 +312,8 @@ class LocationMonitoringService : Service() {
         // Cancel the notification
         val notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.cancel(ALERT_NOTIFICATION_ID)
+        // Reset alert state so it can trigger again when leaving and re-entering
+        alertedStations.clear()
     }
 
     private fun showFullScreenAlertNotification(stationName: String) {
@@ -405,11 +474,31 @@ class LocationMonitoringService : Service() {
         private const val FASTEST_LOCATION_INTERVAL = 10000L // 10 seconds
         private const val MAX_UPDATE_DELAY = 30000L // Allow up to 30s between updates
 
-        fun startService(context: Context, vibrateMode: VibrateMode, stations: List<String>) {
+        // Broadcast actions for location updates
+        const val ACTION_LOCATION_UPDATE = "com.subwayalert.ACTION_LOCATION_UPDATE"
+        const val ACTION_STATION_ALERT = "com.subwayalert.ACTION_STATION_ALERT"
+        const val EXTRA_LATITUDE = "latitude"
+        const val EXTRA_LONGITUDE = "longitude"
+        const val EXTRA_ALERT_STATION_NAME = "alert_station_name"
+        const val EXTRA_STATION_COORDS = "station_coords"
+        const val EXTRA_GEOFENCE_RADIUS = "geofence_radius"
+
+        fun startService(
+            context: Context,
+            vibrateMode: VibrateMode,
+            stations: List<String>,
+            stationCoords: Map<String, Pair<Double, Double>>,
+            geofenceRadius: Float
+        ) {
             val intent = Intent(context, LocationMonitoringService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_VIBRATE_MODE, vibrateMode.name)
                 putStringArrayListExtra(EXTRA_STATIONS, ArrayList(stations))
+                // Encode station coords: "name:lat,lng;name:lat,lng"
+                putExtra(EXTRA_STATION_COORDS, stationCoords.entries.joinToString(";") { 
+                    "${it.key}:${it.value.first},${it.value.second}" 
+                })
+                putExtra(EXTRA_GEOFENCE_RADIUS, geofenceRadius)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

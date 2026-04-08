@@ -1,7 +1,7 @@
 {
-  "version": "1.0.33",
-  "versionCode": 34,
+  "version": "1.0.34",
+  "versionCode": 35,
   "downloadUrl": "/apk/app.apk",
-  "releaseNotes": "修复位置轨迹记录问题：首次定位即可保存，优化轨迹记录时机",
-  "apkSize": 15789825
+  "releaseNotes": "后台运行时持续刷新位置监控，使用前台服务在后台保持运行",
+  "apkSize": 15793245
 }
