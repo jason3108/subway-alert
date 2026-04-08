@@ -1,7 +1,7 @@
 {
-  "version": "1.0.36",
-  "versionCode": 37,
+  "version": "1.0.37",
+  "versionCode": 38,
   "downloadUrl": "/apk/app.apk",
-  "releaseNotes": "轨迹页面集成OSM地图，在地图上显示轨迹路线和标记点",
+  "releaseNotes": "调试信息按钮始终显示，不再需要关闭监控才能访问",
   "apkSize": 16456720
 }
