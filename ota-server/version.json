@@ -1,7 +1,7 @@
 {
-  "version": "1.0.34",
-  "versionCode": 35,
+  "version": "1.0.35",
+  "versionCode": 36,
   "downloadUrl": "/apk/app.apk",
-  "releaseNotes": "后台运行时持续刷新位置监控，使用前台服务在后台保持运行",
-  "apkSize": 15793245
+  "releaseNotes": "改进闹钟式提醒：添加音频焦点请求，使用异步准备确保铃声可靠播放",
+  "apkSize": 15794061
 }

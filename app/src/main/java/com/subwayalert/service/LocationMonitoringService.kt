@@ -292,10 +292,17 @@ class LocationMonitoringService : Service() {
     private var isAlertActive = false
     private var currentAlertStation: String = ""
     private var mediaPlayer: android.media.MediaPlayer? = null
+    private var audioManager: android.media.AudioManager? = null
 
     private fun triggerAlert(stationName: String, vibrateMode: VibrateMode = currentVibrateMode) {
         currentAlertStation = stationName
         isAlertActive = true
+        
+        // Get audio manager
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        
+        // Request audio focus for alarm
+        requestAudioFocus()
         
         // Show full-screen notification (will turn on screen and show over lock screen)
         showFullScreenAlertNotification(stationName)
@@ -303,6 +310,19 @@ class LocationMonitoringService : Service() {
         startAlarmSound()
         // Start continuous vibration
         startAlarmVibration()
+    }
+    
+    private fun requestAudioFocus() {
+        audioManager?.let { am ->
+            val focusRequest = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build())
+                .setOnAudioFocusChangeListener { }
+                .build()
+            am.requestAudioFocus(focusRequest)
+        }
     }
 
     private fun stopAlert() {
@@ -371,8 +391,10 @@ class LocationMonitoringService : Service() {
                     .build())
                 setDataSource(this@LocationMonitoringService, android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI)
                 isLooping = true
-                prepare()
-                start()
+                setOnPreparedListener { mp ->
+                    mp.start()
+                }
+                prepareAsync()  // Use async for alarm sounds
             }
         } catch (e: Exception) {
             e.printStackTrace()
