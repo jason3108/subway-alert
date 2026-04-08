@@ -7,8 +7,10 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.subwayalert.presentation.ui.screens.MainScreen
+import com.subwayalert.presentation.ui.screens.TrackScreen
 import com.subwayalert.presentation.ui.theme.SubwayAlertTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -22,7 +24,16 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen()
+                    var currentScreen by remember { mutableStateOf("main") }
+                    
+                    when (currentScreen) {
+                        "main" -> MainScreen(
+                            onNavigateToTrack = { currentScreen = "track" }
+                        )
+                        "track" -> TrackScreen(
+                            onBack = { currentScreen = "main" }
+                        )
+                    }
                 }
             }
         }
@@ -30,8 +41,6 @@ class MainActivity : ComponentActivity() {
     
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Handle intent when app is already running
-        // This prevents recreation and preserves state
         setIntent(intent)
     }
 }

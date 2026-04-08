@@ -41,10 +41,8 @@ class OTARequestHandler(SimpleHTTPRequestHandler):
             with open(VERSION_FILE, 'r', encoding='utf-8') as f:
                 version_info = json.load(f)
 
-            # Update download URL with actual server address
-            if 'downloadUrl' in version_info and '<你的服务器IP或域名>' in version_info['downloadUrl']:
-                host = self.headers.get('Host', f'{self.server.server_address[0]}:{self.server.server_address[1]}')
-                version_info['downloadUrl'] = f'http://{host}/apk/app.apk'
+            # Always return relative path - Android app will construct full URL
+            version_info['downloadUrl'] = '/apk/app.apk'
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')

@@ -33,6 +33,8 @@ class PreferencesManager @Inject constructor(
         val MONITORING_MODE = stringPreferencesKey("monitoring_mode")
         val POLLING_INTERVAL = intPreferencesKey("polling_interval")
         val OTA_SERVER_URL = stringPreferencesKey("ota_server_url")
+        val IS_MONITORING = booleanPreferencesKey("is_monitoring")
+        val TRACK_LOCATION_TRACK = booleanPreferencesKey("track_location_track")
     }
 
     val stationsFlow: Flow<List<Station>> = context.dataStore.data.map { prefs ->
@@ -55,8 +57,19 @@ class PreferencesManager @Inject constructor(
                 MonitoringMode.POLLING
             },
             pollingIntervalSeconds = prefs[Keys.POLLING_INTERVAL] ?: 30,
-            otaServerUrl = prefs[Keys.OTA_SERVER_URL] ?: ""
+            otaServerUrl = prefs[Keys.OTA_SERVER_URL] ?: "",
+            trackLocationTrack = prefs[Keys.TRACK_LOCATION_TRACK] ?: false
         )
+    }
+    
+    val isMonitoringFlow: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[Keys.IS_MONITORING] ?: false
+    }
+    
+    suspend fun setMonitoring(monitoring: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.IS_MONITORING] = monitoring
+        }
     }
     
     suspend fun saveStations(stations: List<Station>) {
@@ -73,6 +86,7 @@ class PreferencesManager @Inject constructor(
             prefs[Keys.MONITORING_MODE] = settings.monitoringMode.name
             prefs[Keys.POLLING_INTERVAL] = settings.pollingIntervalSeconds
             prefs[Keys.OTA_SERVER_URL] = settings.otaServerUrl
+            prefs[Keys.TRACK_LOCATION_TRACK] = settings.trackLocationTrack
         }
     }
 

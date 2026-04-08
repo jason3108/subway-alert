@@ -70,21 +70,22 @@ class LocationMonitoringService : Service() {
                 stopSelf()
             }
             ACTION_TEST_ALERT -> {
-                // Get vibrate mode from extra, or use current saved mode
+                // Get vibrate mode from extra
                 val mode = intent.getStringExtra(EXTRA_VIBRATE_MODE)?.let {
-                    try { VibrateMode.valueOf(it) } catch (e: Exception) { currentVibrateMode }
-                } ?: currentVibrateMode
-                currentVibrateMode = mode
-                triggerVibration()
+                    try { VibrateMode.valueOf(it) } catch (e: Exception) { VibrateMode.LONG }
+                } ?: VibrateMode.LONG
+                triggerVibrationWithMode(mode)
             }
             ACTION_TRIGGER_ALERT -> {
                 val stationName = intent.getStringExtra(EXTRA_STATION_NAME) ?: "地铁站"
-                // Get vibrate mode from extra, or use current saved mode
+                // Parse vibrate mode from extra, use LONG as fallback if parsing fails
                 val mode = intent.getStringExtra(EXTRA_VIBRATE_MODE)?.let {
-                    try { VibrateMode.valueOf(it) } catch (e: Exception) { currentVibrateMode }
-                } ?: currentVibrateMode
-                currentVibrateMode = mode
-                triggerAlert(stationName)
+                    try { VibrateMode.valueOf(it) } catch (e: Exception) { VibrateMode.LONG }
+                } ?: VibrateMode.LONG
+                triggerAlert(stationName, mode)
+            }
+            ACTION_DISMISS_ALERT -> {
+                stopAlert()
             }
         }
         return START_STICKY
@@ -218,34 +219,59 @@ class LocationMonitoringService : Service() {
         }
     }
 
-    private fun triggerAlert(stationName: String) {
-        // Show high-priority notification
+    private var isAlertActive = false
+    private var currentAlertStation: String = ""
+
+    private fun triggerAlert(stationName: String, vibrateMode: VibrateMode = currentVibrateMode) {
+        currentAlertStation = stationName
+        isAlertActive = true
+        
+        // Show persistent notification with dismiss button
         showAlertNotification(stationName)
-        // Trigger vibration
-        triggerVibration()
+        // Start continuous vibration like alarm
+        startAlarmVibration()
+    }
+
+    private fun stopAlert() {
+        isAlertActive = false
+        stopVibration()
+        // Cancel the notification
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.cancel(ALERT_NOTIFICATION_ID)
     }
 
     private fun showAlertNotification(stationName: String) {
         val notificationManager = getSystemService(NotificationManager::class.java)
         
+        // Create dismiss intent
+        val dismissIntent = Intent(this, LocationMonitoringService::class.java).apply {
+            action = ACTION_DISMISS_ALERT
+        }
+        val dismissPendingIntent = PendingIntent.getService(
+            this, 0,
+            dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Create open intent
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val pendingIntent = PendingIntent.getActivity(
+        val openPendingIntent = PendingIntent.getActivity(
             this, stationName.hashCode(),
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID_ALERT)
-            .setContentTitle("🚇 到站提醒")
-            .setContentText("接近 $stationName")
+            .setContentTitle("🚇 到站提醒 - $stationName")
+            .setContentText("点击关闭提醒")
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(openPendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setAutoCancel(true)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setOngoing(true)  // Persistent notification
+            .addAction(R.drawable.ic_notification, "关闭", dismissPendingIntent)
             .build()
 
         if (ActivityCompat.checkSelfPermission(
@@ -256,7 +282,7 @@ class LocationMonitoringService : Service() {
         }
     }
 
-    fun triggerVibration() {
+    fun startAlarmVibration() {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val manager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
             manager.defaultVibrator
@@ -266,12 +292,44 @@ class LocationMonitoringService : Service() {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val effect = when (currentVibrateMode) {
-                // Use amplitude 255 (max) for consistent strong vibration
+            // Alarm pattern: vibrate 1s, pause 0.5s, repeat indefinitely
+            val pattern = longArrayOf(0, 1000, 500, 1000, 500, 1000, 500)
+            val amplitudes = intArrayOf(0, 255, 0, 255, 0, 255, 0)
+            val effect = VibrationEffect.createWaveform(pattern, amplitudes, -1)
+            vibrator.vibrate(effect)
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(longArrayOf(0, 1000, 500, 1000, 500, 1000, 500), -1)
+        }
+    }
+
+    fun stopVibration() {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val manager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            manager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+        vibrator.cancel()
+    }
+
+    // Keep triggerVibrationWithMode for settings preview
+    fun triggerVibrationWithMode(mode: VibrateMode) {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val manager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            manager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val effect = when (mode) {
                 VibrateMode.SHORT -> VibrationEffect.createOneShot(500, 255)
-                VibrateMode.LONG -> VibrationEffect.createOneShot(1500, 255) // Increased from 1000ms to 1500ms
+                VibrateMode.LONG -> VibrationEffect.createOneShot(1500, 255)
                 VibrateMode.REPEAT -> VibrationEffect.createWaveform(
-                    longArrayOf(0, 800, 300, 800, 300, 800), // 3x 800ms vibration with 300ms pauses
+                    longArrayOf(0, 800, 300, 800, 300, 800),
                     intArrayOf(0, 255, 0, 255, 0, 255),
                     -1
                 )
@@ -279,7 +337,7 @@ class LocationMonitoringService : Service() {
             vibrator.vibrate(effect)
         } else {
             @Suppress("DEPRECATION")
-            when (currentVibrateMode) {
+            when (mode) {
                 VibrateMode.SHORT -> vibrator.vibrate(500)
                 VibrateMode.LONG -> vibrator.vibrate(1500)
                 VibrateMode.REPEAT -> vibrator.vibrate(longArrayOf(0, 800, 300, 800, 300, 800), -1)
@@ -297,6 +355,7 @@ class LocationMonitoringService : Service() {
         const val ACTION_TEST_ALERT = "com.subwayalert.ACTION_TEST_ALERT"
         const val ACTION_TRIGGER_ALERT = "com.subwayalert.ACTION_TRIGGER_ALERT"
         const val ACTION_GEOFENCE_EVENT = "com.subwayalert.ACTION_GEOFENCE_EVENT"
+        const val ACTION_DISMISS_ALERT = "com.subwayalert.ACTION_DISMISS_ALERT"
         const val EXTRA_VIBRATE_MODE = "vibrate_mode"
         const val EXTRA_STATIONS = "stations"
         const val EXTRA_STATION_NAME = "station_name"

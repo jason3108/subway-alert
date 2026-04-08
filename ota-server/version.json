@@ -1,7 +1,7 @@
 {
-  "version": "1.0.11",
-  "versionCode": 12,
-  "downloadUrl": "http://57.181.31.80:8080/apk/app.apk",
-  "releaseNotes": "优化APK安装流程，直接使用系统安装器",
-  "apkSize": 15789301
+  "version": "1.0.28",
+  "versionCode": 29,
+  "downloadUrl": "/apk/app.apk",
+  "releaseNotes": "提醒改为闹钟式持续振动，直到用户点击关闭按钮",
+  "apkSize": 15788633
 }

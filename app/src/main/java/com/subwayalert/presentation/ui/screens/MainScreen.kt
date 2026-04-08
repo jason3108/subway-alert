@@ -30,6 +30,7 @@ import com.subwayalert.presentation.viewmodel.UpdateUiState
 import com.subwayalert.presentation.viewmodel.UpdateViewModel
 import com.subwayalert.domain.model.PresetStations
 import com.subwayalert.domain.model.Settings
+import com.subwayalert.service.LocationMonitoringService
 import com.subwayalert.domain.model.Station
 import com.subwayalert.domain.model.VibrateMode
 import com.subwayalert.presentation.viewmodel.MainViewModel
@@ -37,13 +38,15 @@ import com.subwayalert.presentation.viewmodel.MainViewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    viewModel: MainViewModel = hiltViewModel()
+    viewModel: MainViewModel = hiltViewModel(),
+    onNavigateToTrack: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showDebugDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var stationToDelete by remember { mutableStateOf<Station?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -109,6 +112,13 @@ fun MainScreen(
                         Icon(
                             Icons.Default.Update,
                             contentDescription = "检查更新",
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+                    IconButton(onClick = onNavigateToTrack) {
+                        Icon(
+                            Icons.Default.Route,
+                            contentDescription = "位置轨迹",
                             tint = MaterialTheme.colorScheme.onPrimary
                         )
                     }
@@ -234,7 +244,7 @@ fun MainScreen(
                             station = station,
                             distance = distance,
                             isWithinRange = isWithinRange,
-                            onRemove = { viewModel.onRemoveStation(station) }
+                            onRemove = { stationToDelete = station }
                         )
                     }
                 }
@@ -314,6 +324,30 @@ fun MainScreen(
                     data = Uri.fromParts("package", context.packageName, null)
                 }
                 context.startActivity(intent)
+            }
+        )
+    }
+
+    // Delete Confirmation Dialog
+    if (stationToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { stationToDelete = null },
+            title = { Text("确认删除") },
+            text = { Text("确定要删除监控站点「${stationToDelete!!.name}」吗？删除后无法恢复。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.onRemoveStation(stationToDelete!!)
+                        stationToDelete = null
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { stationToDelete = null }) {
+                    Text("取消")
+                }
             }
         )
     }
@@ -630,11 +664,13 @@ fun SettingsDialog(
     onDismiss: () -> Unit,
     onSave: (Settings) -> Unit
 ) {
+    val context = LocalContext.current
     var radius by remember { mutableFloatStateOf(settings.geofenceRadius) }
     var vibrateMode by remember { mutableStateOf(settings.vibrateMode) }
     var soundEnabled by remember { mutableStateOf(settings.soundEnabled) }
     var monitoringMode by remember { mutableStateOf(settings.monitoringMode) }
     var pollingInterval by remember { mutableIntStateOf(settings.pollingIntervalSeconds) }
+    var trackLocationTrack by remember { mutableStateOf(settings.trackLocationTrack) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -732,7 +768,14 @@ fun SettingsDialog(
                     ) {
                         RadioButton(
                             selected = vibrateMode == mode,
-                            onClick = { vibrateMode = mode }
+                            onClick = {
+                                vibrateMode = mode
+                                // Play vibration preview
+                                LocationMonitoringService.testAlert(
+                                    context,
+                                    mode
+                                )
+                            }
                         )
                         Text(
                             text = when (mode) {
@@ -762,6 +805,30 @@ fun SettingsDialog(
                         onCheckedChange = { soundEnabled = it }
                     )
                 }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Track Location setting
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "跟踪位置轨迹",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "开启监控后记录位置变化（>500米）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = trackLocationTrack,
+                        onCheckedChange = { trackLocationTrack = it }
+                    )
+                }
             }
         },
         confirmButton = {
@@ -772,7 +839,8 @@ fun SettingsDialog(
                         vibrateMode = vibrateMode,
                         soundEnabled = soundEnabled,
                         monitoringMode = monitoringMode,
-                        pollingIntervalSeconds = pollingInterval
+                        pollingIntervalSeconds = pollingInterval,
+                        trackLocationTrack = trackLocationTrack
                     ))
                 }
             ) {
@@ -965,7 +1033,26 @@ fun UpdateDialog(
     onDismiss: () -> Unit
 ) {
     val uiState by updateViewModel.uiState.collectAsState()
-    var serverUrl by remember { mutableStateOf(uiState.currentSettings.otaServerUrl) }
+    var serverUrl by remember { mutableStateOf("") }
+    var hasInitialized by remember { mutableStateOf(false) }
+    
+    // Update serverUrl when dialog opens and when settings change
+    val currentOtaUrl by rememberUpdatedState(uiState.currentSettings.otaServerUrl)
+    LaunchedEffect(Unit) {
+        // Small delay to ensure flow has been collected
+        kotlinx.coroutines.delay(100)
+        if (serverUrl.isEmpty() && currentOtaUrl.isNotEmpty()) {
+            serverUrl = currentOtaUrl
+        }
+        hasInitialized = true
+    }
+    
+    // Also update if settings change after initial load
+    LaunchedEffect(currentOtaUrl) {
+        if (hasInitialized && serverUrl.isEmpty() && currentOtaUrl.isNotEmpty()) {
+            serverUrl = currentOtaUrl
+        }
+    }
     
     AlertDialog(
         onDismissRequest = onDismiss,

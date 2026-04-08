@@ -6,7 +6,8 @@ data class Settings(
     val soundEnabled: Boolean = false,
     val monitoringMode: MonitoringMode = MonitoringMode.POLLING,
     val pollingIntervalSeconds: Int = 30,
-    val otaServerUrl: String = "" // OTA更新服务器地址
+    val otaServerUrl: String = "", // OTA更新服务器地址
+    val trackLocationTrack: Boolean = false // 跟踪位置轨迹
 )
 
 enum class VibrateMode {

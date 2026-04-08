@@ -33,9 +33,41 @@ class UpdateRepository @Inject constructor(
         private const val CHECK_UPDATE_PATH = "/api/check-update"
     }
     
-    fun getCurrentVersion(): String = AppVersion.VERSION
+    /**
+     * Get the actual installed version name from PackageManager
+     * This reflects the currently installed app version, not the compiled static value
+     */
+    fun getCurrentVersion(): String {
+        return try {
+            val packageInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            packageInfo.versionName ?: AppVersion.VERSION
+        } catch (e: Exception) {
+            AppVersion.VERSION
+        }
+    }
     
-    fun getCurrentVersionCode(): Int = AppVersion.VERSION_CODE
+    /**
+     * Get the actual installed version code from PackageManager
+     */
+    fun getCurrentVersionCode(): Int {
+        return try {
+            val packageInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode
+        } catch (e: Exception) {
+            AppVersion.VERSION_CODE
+        }
+    }
     
     /**
      * Check for updates from OTA server
@@ -59,13 +91,21 @@ class UpdateRepository @Inject constructor(
                 val serverVersionCode = json.getInt("versionCode")
                 val currentCode = getCurrentVersionCode()
                 
-                // 如果服务器版本更新
+                // 如果服务器版本更新，拼接完整的下载URL
                 if (serverVersionCode > currentCode) {
+                    // downloadUrl可能是相对路径或绝对路径
+                    val rawDownloadUrl = json.getString("downloadUrl")
+                    val fullDownloadUrl = if (rawDownloadUrl.startsWith("http")) {
+                        rawDownloadUrl
+                    } else {
+                        // 相对路径，拼接到baseUrl
+                        "${baseUrl}${if (rawDownloadUrl.startsWith("/")) "" else "/"}$rawDownloadUrl"
+                    }
                     return@withContext UpdateCheckResult.Available(
                         UpdateInfo(
                             version = json.getString("version"),
                             versionCode = serverVersionCode,
-                            downloadUrl = json.getString("downloadUrl"),
+                            downloadUrl = fullDownloadUrl,
                             releaseNotes = json.getString("releaseNotes"),
                             apkSize = json.getLong("apkSize"),
                             minVersionCode = json.optInt("minVersionCode", 1)
@@ -126,36 +166,53 @@ class UpdateRepository @Inject constructor(
     }
     
     /**
-     * Install APK file - directly opens system package installer
+     * Install APK file - opens system package installer
+     * Uses ACTION_VIEW with application/vnd.android.package-archive MIME type
+     * which Android automatically routes to the system's package installer.
+     * No hardcoded package name to ensure compatibility across all devices/ROMs.
      */
     fun installApk(apkFile: File) {
         val uri = getFileUri(apkFile)
         
-        // Get the system package installer directly
-        val packageInstaller = context.packageManager.packageInstaller
+        // Grant URI permissions first (required for FileProvider)
+        context.grantUriPermission(
+            context.packageName,
+            uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+        )
         
         // Build the install intent
+        // Using ACTION_VIEW with package-archive MIME type lets system
+        // automatically pick the appropriate installer
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         
-        // Try to resolve the system package installer first
-        val resolveInfo = context.packageManager.resolveActivity(
-            Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                setPackage("com.android.packageinstaller")
-            },
-            android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
-        )
-        
-        if (resolveInfo != null) {
-            // Use system package installer explicitly
-            intent.setPackage("com.android.packageinstaller")
+        // Try to start the activity and let system handle it
+        // Don't hardcode package name - some devices have different installers
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            // If direct start fails, try with chooser as fallback
+            e.printStackTrace()
+            val chooserIntent = Intent.createChooser(intent, "安装更新")
+            chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(chooserIntent)
+            } catch (e2: Exception) {
+                e2.printStackTrace()
+                // Last resort: try package installer directly
+                val fallbackIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    setPackage("com.android.packageinstaller")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(fallbackIntent)
+            }
         }
-        
-        context.startActivity(intent)
     }
     
     private fun getFileUri(file: File): Uri {

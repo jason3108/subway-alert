@@ -26,6 +26,9 @@
 
     <!-- Receive boot completed to restart monitoring -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    
+    <!-- Request to install packages (Android 8.0+) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".SubwayAlertApp"

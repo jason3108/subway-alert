@@ -15,7 +15,9 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
+import com.subwayalert.data.local.PreferencesManager
 import com.subwayalert.data.repository.GeocodingRepository
+import com.subwayalert.data.repository.LocationTrackRepository
 import com.subwayalert.data.repository.StationRepository
 import com.subwayalert.domain.model.MonitoringMode
 import com.subwayalert.domain.model.Settings
@@ -51,7 +53,9 @@ data class MainUiState(
 class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val stationRepository: StationRepository,
-    private val geocodingRepository: GeocodingRepository
+    private val geocodingRepository: GeocodingRepository,
+    private val preferencesManager: PreferencesManager,
+    private val locationTrackRepository: LocationTrackRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -81,6 +85,10 @@ class MainViewModel @Inject constructor(
     
     // Track stations that have already been alerted (to avoid repeated alerts)
     private val alertedStations = mutableSetOf<String>()
+    
+    // Last location for track recording
+    private var lastTrackLocation: Location? = null
+    private val TRACK_DISTANCE_THRESHOLD = 500f // meters
 
     private fun startPeriodicLocationUpdates() {
         locationUpdateJob?.cancel()
@@ -110,6 +118,15 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             stationRepository.settingsFlow.collect { settings ->
                 _uiState.update { it.copy(settings = settings) }
+            }
+        }
+        viewModelScope.launch {
+            preferencesManager.isMonitoringFlow.collect { isMonitoring ->
+                _uiState.update { it.copy(isMonitoring = isMonitoring) }
+                // Restore monitoring service if needed
+                if (isMonitoring) {
+                    startMonitoringService()
+                }
             }
         }
     }
@@ -206,15 +223,21 @@ class MainViewModel @Inject constructor(
             stationRepository.removeStation(station.id)
             
             val remaining = _uiState.value.stations.filter { it.id != station.id }
+            val wasMonitoring = _uiState.value.isMonitoring
+            val anyMonitoring = remaining.any { s -> s.isMonitoring }
+            
             _uiState.update { 
                 it.copy(
                     stations = remaining,
-                    isMonitoring = remaining.any { s -> s.isMonitoring }
+                    isMonitoring = anyMonitoring
                 )
             }
             
             if (remaining.isEmpty()) {
                 stopMonitoringService()
+                preferencesManager.setMonitoring(false)
+            } else if (wasMonitoring && !anyMonitoring) {
+                preferencesManager.setMonitoring(false)
             }
         }
     }
@@ -224,12 +247,25 @@ class MainViewModel @Inject constructor(
     }
 
     fun onToggleMonitoring() {
-        if (_uiState.value.isMonitoring) {
-            stopMonitoringService()
-            _uiState.update { it.copy(isMonitoring = false) }
-        } else {
-            startMonitoringService()
-            _uiState.update { it.copy(isMonitoring = true) }
+        viewModelScope.launch {
+            if (_uiState.value.isMonitoring) {
+                stopMonitoringService()
+                _uiState.update { it.copy(isMonitoring = false) }
+                preferencesManager.setMonitoring(false)
+                // Stop tracking
+                if (_uiState.value.settings.trackLocationTrack) {
+                    locationTrackRepository.stopTracking()
+                }
+            } else {
+                startMonitoringService()
+                _uiState.update { it.copy(isMonitoring = true) }
+                preferencesManager.setMonitoring(true)
+                // Start tracking
+                if (_uiState.value.settings.trackLocationTrack) {
+                    locationTrackRepository.startTracking()
+                    lastTrackLocation = null // Reset last location
+                }
+            }
         }
     }
 
@@ -264,12 +300,28 @@ class MainViewModel @Inject constructor(
         
         // Immediately get current location and calculate distances
         updateCurrentLocation()
+        
+        // Start location tracking if enabled
+        if (settings.trackLocationTrack) {
+            viewModelScope.launch {
+                locationTrackRepository.startTracking()
+            }
+            lastTrackLocation = null
+        }
     }
 
     private fun stopMonitoringService() {
         LocationMonitoringService.stopService(context)
         geofencingClient.removeGeofences(geofencePendingIntent)
         stopPeriodicLocationUpdates()
+        
+        // Stop location tracking
+        if (_uiState.value.settings.trackLocationTrack) {
+            viewModelScope.launch {
+                locationTrackRepository.stopTracking()
+            }
+            lastTrackLocation = null
+        }
     }
 
     private fun addGeofence(station: Station) {
@@ -342,7 +394,7 @@ class MainViewModel @Inject constructor(
         return granted
     }
 
-    fun updateCurrentLocation() {
+    private fun updateCurrentLocation() {
         if (ActivityCompat.checkSelfPermission(
                 context, Manifest.permission.ACCESS_FINE_LOCATION
             ) != PackageManager.PERMISSION_GRANTED
@@ -368,6 +420,11 @@ class MainViewModel @Inject constructor(
                         state.copy(currentLocation = loc, stationDistances = distances)
                     }
                     
+                    // Record location track if enabled and moved > 500m
+                    if (_uiState.value.settings.trackLocationTrack && _uiState.value.isMonitoring) {
+                        recordLocationTrack(loc)
+                    }
+                    
                     // Check if any station is within range and trigger alert
                     // Use current settings radius, not each station's stored radius
                     val currentStations = _uiState.value.stations
@@ -391,6 +448,28 @@ class MainViewModel @Inject constructor(
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+        }
+    }
+    
+    private suspend fun recordLocationTrack(loc: Location) {
+        val lastLoc = lastTrackLocation
+        if (lastLoc != null) {
+            val results = FloatArray(1)
+            Location.distanceBetween(
+                lastLoc.latitude, lastLoc.longitude,
+                loc.latitude, loc.longitude,
+                results
+            )
+            val distance = results[0]
+            if (distance >= TRACK_DISTANCE_THRESHOLD) {
+                // Moved more than 500m, record this point
+                locationTrackRepository.addPoint(loc.latitude, loc.longitude, loc.accuracy)
+                lastTrackLocation = loc
+            }
+        } else {
+            // First point, just record it
+            locationTrackRepository.addPoint(loc.latitude, loc.longitude, loc.accuracy)
+            lastTrackLocation = loc
         }
     }
 
