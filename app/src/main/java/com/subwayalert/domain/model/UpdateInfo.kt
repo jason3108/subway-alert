@@ -16,8 +16,8 @@ sealed class UpdateCheckResult {
 }
 
 object AppVersion {
-    const val VERSION = "1.0.35"
-    const val VERSION_CODE = 36
+    const val VERSION = "1.0.36"
+    const val VERSION_CODE = 37
     
     // Update server URL - can be customized
     // For demo, using a simple JSON endpoint
