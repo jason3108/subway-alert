@@ -291,6 +291,7 @@ fun MainScreen(
             stations = uiState.stations,
             distances = uiState.stationDistances,
             currentLocation = uiState.currentLocation,
+            geofenceRadius = uiState.settings.geofenceRadius,
             onRefresh = { viewModel.refreshLocation() },
             onTestGeofence = { viewModel.testGeofenceAlert() },
             onDismiss = { showDebugDialog = false }
@@ -891,6 +892,7 @@ fun DebugDialog(
     stations: List<Station>,
     distances: Map<String, Float>,
     currentLocation: android.location.Location?,
+    geofenceRadius: Float,
     onRefresh: () -> Unit,
     onTestGeofence: () -> Unit,
     onDismiss: () -> Unit
@@ -959,9 +961,9 @@ fun DebugDialog(
                         
                         val distance = distances[station.id]
                         if (distance != null) {
-                            val isWithinRange = distance <= station.radius
+                            val isWithinRange = distance <= geofenceRadius
                             Text(
-                                text = "距离: ${formatDistance(distance)} (范围${station.radius.toInt()}米内)",
+                                text = "距离: ${formatDistance(distance)} (范围${geofenceRadius.toInt()}米内)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (isWithinRange) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                             )
@@ -972,7 +974,7 @@ fun DebugDialog(
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             } else {
-                                val remaining = distance - station.radius
+                                val remaining = distance - geofenceRadius
                                 Text(
                                     text = "✗ 还差 ${formatDistance(remaining)}",
                                     style = MaterialTheme.typography.bodySmall,
