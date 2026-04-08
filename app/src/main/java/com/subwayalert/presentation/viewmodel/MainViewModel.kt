@@ -479,10 +479,12 @@ class MainViewModel @Inject constructor(
         try {
             val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
             
+            // Network provider first (WiFi/cell towers work better in subway)
+            // GPS requires clear sky view which doesn't work underground
             val providers = listOf(
-                android.location.LocationManager.GPS_PROVIDER,
                 android.location.LocationManager.NETWORK_PROVIDER,
-                android.location.LocationManager.PASSIVE_PROVIDER
+                android.location.LocationManager.PASSIVE_PROVIDER,
+                android.location.LocationManager.GPS_PROVIDER
             )
             
             for (provider in providers) {

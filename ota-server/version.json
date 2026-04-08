@@ -1,7 +1,7 @@
 {
-  "version": "1.0.29",
-  "versionCode": 30,
+  "version": "1.0.30",
+  "versionCode": 31,
   "downloadUrl": "/apk/app.apk",
-  "releaseNotes": "修复调试信息窗口使用设置中的监控半径",
+  "releaseNotes": "优化地铁内定位：改用网络定位替代GPS，信号差时仍能更新位置",
   "apkSize": 15789197
 }

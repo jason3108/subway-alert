@@ -183,10 +183,13 @@ class LocationMonitoringService : Service() {
         }
 
         val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
+            // Use BALANCED for better subway coverage (uses WiFi/cell towers, not just GPS)
+            // HIGH_ACCURACY waits for GPS which doesn't work underground
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY,
             LOCATION_UPDATE_INTERVAL
         ).apply {
             setMinUpdateIntervalMillis(FASTEST_LOCATION_INTERVAL)
+            // Don't wait for accurate GPS - we need updates even with low accuracy
             setWaitForAccurateLocation(false)
             setMaxUpdateDelayMillis(MAX_UPDATE_DELAY)
         }.build()
