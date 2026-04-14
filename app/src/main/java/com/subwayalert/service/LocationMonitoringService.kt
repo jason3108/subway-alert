@@ -337,6 +337,8 @@ class LocationMonitoringService : Service() {
     private var mediaPlayer: android.media.MediaPlayer? = null
 
     private fun triggerAlert(stationName: String, distance: Int, vibrateMode: VibrateMode = currentVibrateMode) {
+        if (isAlertActive) return // Prevent multiple alerts from stacking
+        
         currentAlertStation = stationName
         isAlertActive = true
         
@@ -349,8 +351,10 @@ class LocationMonitoringService : Service() {
 
     private fun stopAlert() {
         isAlertActive = false
-        // Reset alert state so it can trigger again when leaving and re-entering
-        alertedStations.clear()
+        // Removed alertedStations.clear() so that alerts don't re-trigger 
+        // immediately while still within the station radius.
+        // Station will be removed from alertedStations in processLocationUpdate 
+        // once the user is out of range.
     }
 
     private fun startAlarmSound() {
