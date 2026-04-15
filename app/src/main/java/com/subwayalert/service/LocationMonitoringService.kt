@@ -18,7 +18,13 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
-import com.google.android.gms.location.*
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationAvailability
+import com.google.android.gms.location.Priority
 import com.subwayalert.R
 import com.subwayalert.domain.model.VibrateMode
 import com.subwayalert.presentation.ui.MainActivity
@@ -29,18 +35,7 @@ import javax.inject.Inject
 class LocationMonitoringService : Service() {
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private lateinit var geofencingClient: GeofencingClient
     private var wakeLock: PowerManager.WakeLock? = null
-    
-    private val geofencePendingIntent: PendingIntent by lazy {
-        val intent = Intent(this, com.subwayalert.receiver.GeofenceBroadcastReceiver::class.java).apply {
-            action = ACTION_GEOFENCE_EVENT
-        }
-        PendingIntent.getBroadcast(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-        )
-    }
 
     private var currentVibrateMode: VibrateMode = VibrateMode.LONG
     private var monitoredStations: List<String> = emptyList()
@@ -48,11 +43,11 @@ class LocationMonitoringService : Service() {
     private var alertedStations: MutableSet<String> = mutableSetOf()
     private var lastLocation: android.location.Location? = null
     private var geofenceRadius: Float = 300f
+    private var pollingIntervalMs: Long = 30000L  // Default 30 seconds
 
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        geofencingClient = LocationServices.getGeofencingClient(this)
         createNotificationChannels()
         acquireWakeLock()
     }
@@ -67,7 +62,9 @@ class LocationMonitoringService : Service() {
                 // Parse station coordinates from extra
                 stationCoordinates = parseStationCoordinates(intent.getStringExtra(EXTRA_STATION_COORDS))
                 geofenceRadius = intent.getFloatExtra(EXTRA_GEOFENCE_RADIUS, 300f)
+                pollingIntervalMs = intent.getLongExtra(EXTRA_POLLING_INTERVAL, 30000L)
                 alertedStations.clear()
+                isAlertActive = false  // Reset alert state on service start
                 lastLocation = null
                 startForeground(NOTIFICATION_ID, createNotification())
                 startLocationUpdates()
@@ -144,15 +141,16 @@ class LocationMonitoringService : Service() {
             }
             notificationManager.createNotificationChannel(lowChannel)
 
-            // Alert channel - HIGH importance for alerts
+            // Alert channel - MAX importance for full-screen alerts from background
             val alertChannel = NotificationChannel(
                 CHANNEL_ID_ALERT,
                 "到站提醒",
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_MAX
             ).apply {
-                description = "接近地铁站时发出提醒"
+                description = "接近地铁站时发出全屏提醒"
                 enableVibration(true)
                 setBypassDnd(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             notificationManager.createNotificationChannel(alertChannel)
         }
@@ -194,16 +192,19 @@ class LocationMonitoringService : Service() {
             return
         }
 
+        // Use the polling interval from settings (converted to milliseconds)
+        val fastestInterval = (pollingIntervalMs * 0.6).toLong().coerceAtLeast(5000L)
+        
         val locationRequest = LocationRequest.Builder(
             // Use BALANCED for better subway coverage (uses WiFi/cell towers, not just GPS)
             // HIGH_ACCURACY waits for GPS which doesn't work underground
             Priority.PRIORITY_BALANCED_POWER_ACCURACY,
-            LOCATION_UPDATE_INTERVAL
+            pollingIntervalMs
         ).apply {
-            setMinUpdateIntervalMillis(FASTEST_LOCATION_INTERVAL)
+            setMinUpdateIntervalMillis(fastestInterval)
             // Don't wait for accurate GPS - we need updates even with low accuracy
             setWaitForAccurateLocation(false)
-            setMaxUpdateDelayMillis(MAX_UPDATE_DELAY)
+            setMaxUpdateDelayMillis(pollingIntervalMs * 2)
         }.build()
 
         fusedLocationClient.requestLocationUpdates(
@@ -326,7 +327,6 @@ class LocationMonitoringService : Service() {
     private fun stopLocationUpdates() {
         try {
             fusedLocationClient.removeLocationUpdates(locationCallback)
-            geofencingClient.removeGeofences(geofencePendingIntent)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -342,15 +342,75 @@ class LocationMonitoringService : Service() {
         currentAlertStation = stationName
         isAlertActive = true
         
-        // Launch AlertActivity to show full-screen alert
+        // Show full-screen notification (works from background)
+        showFullScreenAlertNotification(stationName, distance)
+        
+        // Also try direct launch as fallback (works when app is foreground)
+        try {
+            val alertIntent = com.subwayalert.presentation.ui.alert.AlertActivity.createIntent(
+                this, stationName, distance
+            )
+            startActivity(alertIntent)
+        } catch (e: Exception) {
+            // Direct launch may fail from background on Android 10+, 
+            // but FULL_SCREEN_INTENT notification will work
+        }
+        
+        // Broadcast station alert event for UI to highlight the station
+        val alertBroadcastIntent = Intent(ACTION_STATION_ALERT).apply {
+            putExtra(EXTRA_ALERT_STATION_NAME, stationName)
+            putExtra(EXTRA_DISTANCE, distance)
+        }
+        sendBroadcast(alertBroadcastIntent)
+    }
+    
+    private fun showFullScreenAlertNotification(stationName: String, distance: Int) {
+        // Create intent to launch AlertActivity
         val alertIntent = com.subwayalert.presentation.ui.alert.AlertActivity.createIntent(
             this, stationName, distance
         )
-        startActivity(alertIntent)
+        
+        // Use FLAGACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP for background launch
+        val flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or 
+                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
+        alertIntent.flags = flags
+        
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            this, 0, alertIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        // Build full-screen notification with MAX priority (required for fullScreenIntent on Android 10+)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID_ALERT)
+            .setContentTitle("🚇 就要到站了")
+            .setContentText(stationName)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setPriority(NotificationCompat.PRIORITY_MAX)  // Must be MAX for fullScreenIntent
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setFullScreenIntent(fullScreenPendingIntent, true) // Key: full-screen intent
+            .setAutoCancel(true)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+        
+        // Android 12+ requires high notification color for full screen
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            builder.setColorized(true)
+            builder.setColor(0xFF4CAF50.toInt()) // Green
+        }
+        
+        val notification = builder.build()
+        
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.notify(ALERT_NOTIFICATION_ID, notification)
     }
 
     private fun stopAlert() {
         isAlertActive = false
+        // Cancel the full-screen alert notification
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.cancel(ALERT_NOTIFICATION_ID)
         // Removed alertedStations.clear() so that alerts don't re-trigger 
         // immediately while still within the station radius.
         // Station will be removed from alertedStations in processLocationUpdate 
@@ -460,7 +520,6 @@ class LocationMonitoringService : Service() {
         const val ACTION_STOP = "com.subwayalert.ACTION_STOP"
         const val ACTION_TEST_ALERT = "com.subwayalert.ACTION_TEST_ALERT"
         const val ACTION_TRIGGER_ALERT = "com.subwayalert.ACTION_TRIGGER_ALERT"
-        const val ACTION_GEOFENCE_EVENT = "com.subwayalert.ACTION_GEOFENCE_EVENT"
         const val ACTION_DISMISS_ALERT = "com.subwayalert.ACTION_DISMISS_ALERT"
         const val EXTRA_VIBRATE_MODE = "vibrate_mode"
         const val EXTRA_STATIONS = "stations"
@@ -480,13 +539,15 @@ class LocationMonitoringService : Service() {
         const val EXTRA_ALERT_STATION_NAME = "alert_station_name"
         const val EXTRA_STATION_COORDS = "station_coords"
         const val EXTRA_GEOFENCE_RADIUS = "geofence_radius"
+        const val EXTRA_POLLING_INTERVAL = "polling_interval"
 
         fun startService(
             context: Context,
             vibrateMode: VibrateMode,
             stations: List<String>,
             stationCoords: Map<String, Pair<Double, Double>>,
-            geofenceRadius: Float
+            geofenceRadius: Float,
+            pollingIntervalSeconds: Int = 30
         ) {
             val intent = Intent(context, LocationMonitoringService::class.java).apply {
                 action = ACTION_START
@@ -497,6 +558,7 @@ class LocationMonitoringService : Service() {
                     "${it.key}:${it.value.first},${it.value.second}" 
                 })
                 putExtra(EXTRA_GEOFENCE_RADIUS, geofenceRadius)
+                putExtra(EXTRA_POLLING_INTERVAL, pollingIntervalSeconds * 1000L)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

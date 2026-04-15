@@ -246,10 +246,12 @@ fun MainScreen(
                     items(sortedStations, key = { it.id }) { station ->
                         val distance = uiState.stationDistances[station.id]
                         val isWithinRange = distance != null && distance <= uiState.settings.geofenceRadius
+                        val isAlerted = uiState.alertedStationId == station.id
                         StationCard(
                             station = station,
                             distance = distance,
                             isWithinRange = isWithinRange,
+                            isAlerted = isAlerted,
                             onRemove = { stationToDelete = station }
                         )
                     }
@@ -365,16 +367,22 @@ fun StationCard(
     station: Station,
     distance: Float?,
     isWithinRange: Boolean = false,
+    isAlerted: Boolean = false,
     onRemove: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isWithinRange)
-                Color(0xFF4CAF50).copy(alpha = 0.2f) // Light green background
-            else
-                MaterialTheme.colorScheme.surface
-        )
+            containerColor = when {
+                isAlerted -> Color(0xFF4CAF50).copy(alpha = 0.5f) // Stronger green for alerted station
+                isWithinRange -> Color(0xFF4CAF50).copy(alpha = 0.2f) // Light green background
+                else -> MaterialTheme.colorScheme.surface
+            }
+        ),
+        border = if (isAlerted) CardDefaults.outlinedCardBorder().copy(
+            width = 2.dp,
+            brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF4CAF50))
+        ) else null
     ) {
         Row(
             modifier = Modifier
@@ -673,10 +681,8 @@ fun SettingsDialog(
 ) {
     val context = LocalContext.current
     var radius by remember { mutableFloatStateOf(settings.geofenceRadius) }
-    var vibrateMode by remember { mutableStateOf(settings.vibrateMode) }
-    var soundEnabled by remember { mutableStateOf(settings.soundEnabled) }
-    var monitoringMode by remember { mutableStateOf(settings.monitoringMode) }
     var pollingInterval by remember { mutableIntStateOf(settings.pollingIntervalSeconds) }
+    var soundEnabled by remember { mutableStateOf(settings.soundEnabled) }
     var trackLocationTrack by remember { mutableStateOf(settings.trackLocationTrack) }
 
     AlertDialog(
@@ -686,66 +692,6 @@ fun SettingsDialog(
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
-                // Monitoring Mode Section
-                Text(
-                    text = "监控方式",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                MonitoringMode.entries.forEach { mode ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = monitoringMode == mode,
-                            onClick = { monitoringMode = mode }
-                        )
-                        Column(modifier = Modifier.padding(start = 8.dp)) {
-                            Text(
-                                text = when (mode) {
-                                    MonitoringMode.POLLING -> "距离判断（推荐）"
-                                    MonitoringMode.GEOFENCE -> "电子围栏"
-                                },
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Text(
-                                text = when (mode) {
-                                    MonitoringMode.POLLING -> "每30秒检查距离，国产机更稳定"
-                                    MonitoringMode.GEOFENCE -> "依赖系统API，国产机可能失效"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                // Polling interval (only show when POLLING mode is selected)
-                if (monitoringMode == MonitoringMode.POLLING) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "检查间隔: ${pollingInterval} 秒",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Slider(
-                        value = pollingInterval.toFloat(),
-                        onValueChange = { pollingInterval = it.toInt() },
-                        valueRange = 10f..120f,
-                        steps = 10,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = "间隔越短越灵敏，但更耗电",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
-
                 // Radius setting
                 Text(
                     text = "监控半径: ${radius.toInt()} 米",
@@ -759,41 +705,25 @@ fun SettingsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Vibration mode
+                // Polling interval
                 Text(
-                    text = "振动模式",
+                    text = "检查间隔: ${pollingInterval} 秒",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                VibrateMode.entries.forEach { mode ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = vibrateMode == mode,
-                            onClick = {
-                                vibrateMode = mode
-                                // Play vibration preview
-                                LocationMonitoringService.testAlert(
-                                    context,
-                                    mode
-                                )
-                            }
-                        )
-                        Text(
-                            text = when (mode) {
-                                VibrateMode.SHORT -> "短振动 (0.5秒)"
-                                VibrateMode.LONG -> "长振动 (1.5秒)"
-                                VibrateMode.REPEAT -> "重复振动 (3次)"
-                            },
-                            modifier = Modifier.padding(start = 8.dp)
-                        )
-                    }
-                }
+                Slider(
+                    value = pollingInterval.toFloat(),
+                    onValueChange = { pollingInterval = it.toInt() },
+                    valueRange = 10f..120f,
+                    steps = 10,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "间隔越短越灵敏，但更耗电",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
                 Divider(modifier = Modifier.padding(vertical = 16.dp))
 
@@ -843,9 +773,9 @@ fun SettingsDialog(
                 onClick = {
                     onSave(Settings(
                         geofenceRadius = radius,
-                        vibrateMode = vibrateMode,
+                        vibrateMode = VibrateMode.LONG,  // Fixed vibration mode
                         soundEnabled = soundEnabled,
-                        monitoringMode = monitoringMode,
+                        monitoringMode = MonitoringMode.POLLING,  // Fixed to POLLING mode
                         pollingIntervalSeconds = pollingInterval,
                         trackLocationTrack = trackLocationTrack
                     ))

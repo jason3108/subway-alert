@@ -29,6 +29,15 @@
     
     <!-- Request to install packages (Android 8.0+) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    
+    <!-- Full screen intent for background alerts (Android 10+) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    
+    <!-- Schedule exact alarm for high-priority notifications (Android 12+) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    
+    <!-- Draw over other apps for background alerts -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".SubwayAlertApp"
@@ -55,25 +64,19 @@
         <activity
             android:name=".presentation.ui.alert.AlertActivity"
             android:exported="false"
-            android:launchMode="singleTop"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
-            android:theme="@style/Theme.SubwayAlert" />
+            android:theme="@style/Theme.SubwayAlert"
+            android:resizeableActivity="false"
+            android:supportsPictureInPicture="false" />
 
         <!-- Location Monitoring Foreground Service -->
         <service
             android:name=".service.LocationMonitoringService"
             android:exported="false"
             android:foregroundServiceType="location" />
-
-        <!-- Geofence Broadcast Receiver -->
-        <receiver
-            android:name=".receiver.GeofenceBroadcastReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.subwayalert.ACTION_GEOFENCE_EVENT" />
-            </intent-filter>
-        </receiver>
 
         <!-- Boot Receiver to restart monitoring -->
         <receiver
@@ -85,12 +88,6 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
-
-        <!-- WakefulBroadcastReceiver for Geofence -->
-        <receiver
-            android:name=".receiver.GeofenceWakefulReceiver"
-            android:exported="false"
-            android:protectionLevel="signature" />
 
         <!-- FileProvider for APK installation -->
         <provider

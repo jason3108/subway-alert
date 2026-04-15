@@ -38,17 +38,17 @@ class AlertActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Keep screen on and show over lock screen
+        // Keep screen on and show over lock screen - essential for background alerts
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+        )
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            )
         }
         
         val stationName = intent.getStringExtra(EXTRA_STATION_NAME) ?: "地铁站"
@@ -179,6 +179,12 @@ class AlertActivity : ComponentActivity() {
         super.onDestroy()
         stopAlarmSound()
         stopVibration()
+    }
+    
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // Back button dismisses the alert like clicking the button
+        dismissAlert()
     }
     
     companion object {

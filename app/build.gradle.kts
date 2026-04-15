@@ -13,8 +13,8 @@ android {
         applicationId = "com.subwayalert"
         minSdk = 26
         targetSdk = 34
-        versionCode = 42
-        versionName = "1.0.41"
+        versionCode = 67
+        versionName = "1.0.67"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

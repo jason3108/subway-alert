@@ -2,8 +2,10 @@ package com.subwayalert.presentation.viewmodel
 
 import android.Manifest
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Build
@@ -12,9 +14,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.GeofencingClient
-import com.google.android.gms.location.Geofence
-import com.google.android.gms.location.GeofencingRequest
 import com.subwayalert.data.local.PreferencesManager
 import com.subwayalert.data.repository.GeocodingRepository
 import com.subwayalert.data.repository.LocationTrackRepository
@@ -23,7 +22,6 @@ import com.subwayalert.domain.model.MonitoringMode
 import com.subwayalert.domain.model.Settings
 import com.subwayalert.domain.model.Station
 import com.subwayalert.domain.model.VibrateMode
-import com.subwayalert.receiver.GeofenceBroadcastReceiver
 import com.subwayalert.service.LocationMonitoringService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -46,7 +44,8 @@ data class MainUiState(
     val currentLocation: Location? = null,
     val stationDistances: Map<String, Float> = emptyMap(),
     val showAddDialog: Boolean = false,
-    val permissionsGranted: Boolean = false
+    val permissionsGranted: Boolean = false,
+    val alertedStationId: String? = null  // ID of station that triggered the alert
 )
 
 @HiltViewModel
@@ -63,21 +62,44 @@ class MainViewModel @Inject constructor(
 
     private val fusedLocationClient: FusedLocationProviderClient =
         LocationServices.getFusedLocationProviderClient(context)
-    private val geofencingClient: GeofencingClient =
-        LocationServices.getGeofencingClient(context)
-
-    private val geofencePendingIntent: PendingIntent by lazy {
-        val intent = Intent(context, GeofenceBroadcastReceiver::class.java).apply {
-            action = LocationMonitoringService.ACTION_GEOFENCE_EVENT
-        }
-        PendingIntent.getBroadcast(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-        )
-    }
 
     init {
         loadData()
+        registerAlertReceiver()
+    }
+
+    // BroadcastReceiver for station alerts from LocationMonitoringService
+    private val stationAlertReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            intent?.let {
+                val alertStationName = it.getStringExtra(LocationMonitoringService.EXTRA_ALERT_STATION_NAME)
+                if (alertStationName != null) {
+                    // Find station by name and update UI state
+                    val station = _uiState.value.stations.find { s -> s.name == alertStationName }
+                    station?.let { s ->
+                        _uiState.update { state -> state.copy(alertedStationId = s.id) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun registerAlertReceiver() {
+        val filter = IntentFilter(LocationMonitoringService.ACTION_STATION_ALERT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(stationAlertReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(stationAlertReceiver, filter)
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        try {
+            context.unregisterReceiver(stationAlertReceiver)
+        } catch (e: Exception) {
+            // Ignore if not registered
+        }
     }
 
     // Periodic location update job
@@ -209,7 +231,8 @@ class MainViewModel @Inject constructor(
                 it.copy(
                     isMonitoring = true,
                     inputText = "", 
-                    showAddDialog = false
+                    showAddDialog = false,
+                    alertedStationId = null // Clear alert state when adding new station
                 ) 
             }
             
@@ -219,7 +242,6 @@ class MainViewModel @Inject constructor(
 
     fun onRemoveStation(station: Station) {
         viewModelScope.launch {
-            removeGeofence(station.id)
             stationRepository.removeStation(station.id)
             
             val remaining = _uiState.value.stations.filter { it.id != station.id }
@@ -229,7 +251,8 @@ class MainViewModel @Inject constructor(
             _uiState.update { 
                 it.copy(
                     stations = remaining,
-                    isMonitoring = anyMonitoring
+                    isMonitoring = anyMonitoring,
+                    alertedStationId = if (station.id == it.alertedStationId) null else it.alertedStationId
                 )
             }
             
@@ -250,7 +273,7 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             if (_uiState.value.isMonitoring) {
                 stopMonitoringService()
-                _uiState.update { it.copy(isMonitoring = false) }
+                _uiState.update { it.copy(isMonitoring = false, alertedStationId = null) }
                 preferencesManager.setMonitoring(false)
                 // Stop tracking
                 if (_uiState.value.settings.trackLocationTrack) {
@@ -258,7 +281,7 @@ class MainViewModel @Inject constructor(
                 }
             } else {
                 startMonitoringService()
-                _uiState.update { it.copy(isMonitoring = true) }
+                _uiState.update { it.copy(isMonitoring = true, alertedStationId = null) }
                 preferencesManager.setMonitoring(true)
                 // Start tracking
                 if (_uiState.value.settings.trackLocationTrack) {
@@ -282,26 +305,12 @@ class MainViewModel @Inject constructor(
             settings.vibrateMode,
             monitoringStations.map { it.name },
             stationCoords,
-            settings.geofenceRadius
+            settings.geofenceRadius,
+            settings.pollingIntervalSeconds
         )
         
-        // Setup based on monitoring mode
-        when (settings.monitoringMode) {
-            MonitoringMode.GEOFENCE -> {
-                // Add geofences for Android's built-in geofencing
-                monitoringStations.forEach { station ->
-                    addGeofence(station)
-                }
-                // Still start polling as backup for distance display
-                startPeriodicLocationUpdates()
-            }
-            MonitoringMode.POLLING -> {
-                // Remove any existing geofences
-                geofencingClient.removeGeofences(geofencePendingIntent)
-                // Start polling-based distance monitoring
-                startPeriodicLocationUpdates()
-            }
-        }
+        // Start polling-based location monitoring (only way, removed geofence)
+        startPeriodicLocationUpdates()
         
         // Immediately get current location and calculate distances
         updateCurrentLocation()
@@ -317,7 +326,6 @@ class MainViewModel @Inject constructor(
 
     private fun stopMonitoringService() {
         LocationMonitoringService.stopService(context)
-        geofencingClient.removeGeofences(geofencePendingIntent)
         stopPeriodicLocationUpdates()
         
         // Stop location tracking
@@ -327,40 +335,6 @@ class MainViewModel @Inject constructor(
             }
             lastTrackLocation = null
         }
-    }
-
-    private fun addGeofence(station: Station) {
-        if (ActivityCompat.checkSelfPermission(
-                context, Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
-        val geofence = Geofence.Builder()
-            .setRequestId(station.id)
-            .setCircularRegion(
-                station.latitude,
-                station.longitude,
-                station.radius
-            )
-            .setExpirationDuration(Geofence.NEVER_EXPIRE)
-            .setTransitionTypes(
-                Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_DWELL
-            )
-            .setLoiteringDelay(30)
-            .build()
-
-        val geofencingRequest = GeofencingRequest.Builder()
-            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
-            .addGeofence(geofence)
-            .build()
-
-        geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent)
-    }
-
-    private fun removeGeofence(stationId: String) {
-        geofencingClient.removeGeofences(listOf(stationId))
     }
 
     fun updateSettings(settings: Settings) {
@@ -424,6 +398,9 @@ class MainViewModel @Inject constructor(
      * Process location update - shared by both foreground and background modes
      */
     private fun processLocationUpdate(loc: Location) {
+        val alertedId = _uiState.value.alertedStationId
+        val settings = _uiState.value.settings
+        
         _uiState.update { state ->
             val distances = state.stations.associate { station ->
                 val results = FloatArray(1)
@@ -434,7 +411,39 @@ class MainViewModel @Inject constructor(
                 )
                 station.id to results[0]
             }
-            state.copy(currentLocation = loc, stationDistances = distances)
+            
+            // If alerted station is now out of range, clear the alerted state
+            val newAlertedId = if (alertedId != null) {
+                val distance = distances[alertedId]
+                if (distance == null || distance > state.settings.geofenceRadius) {
+                    null // User left the station, clear alert
+                } else {
+                    alertedId // Still within range
+                }
+            } else null
+            
+            state.copy(currentLocation = loc, stationDistances = distances, alertedStationId = newAlertedId)
+        }
+        
+        // Check for new stations entering range and trigger alert
+        if (!_uiState.value.isMonitoring) return
+        
+        for (station in _uiState.value.stations) {
+            val distance = _uiState.value.stationDistances[station.id] ?: continue
+            if (distance <= settings.geofenceRadius) {
+                // Within range - check if not already alerted
+                if (alertedId == null || alertedId != station.id) {
+                    // New station entering range - trigger full-screen alert
+                    LocationMonitoringService.triggerAlert(
+                        context,
+                        station.name,
+                        distance.toInt(),
+                        settings.vibrateMode
+                    )
+                    _uiState.update { it.copy(alertedStationId = station.id) }
+                    break // Only alert for one station at a time
+                }
+            }
         }
         
         // Record location track if enabled
